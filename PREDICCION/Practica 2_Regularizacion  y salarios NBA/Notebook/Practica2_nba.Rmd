@@ -1,0 +1,174 @@
+---
+title: "nba2_regularizacion"
+author: "Alvaro Muñoz Jimenez"
+date: "17/10/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#PREDICCIÓN
+
+#EJERCICIO REGULARIZACIÓN
+
+#Para realizar el trabajado he utilizado los sigiuentes paquetes de librerías:
+
+```{r}
+library(rsample)
+library(glmnet) 
+library(dplyr)  
+library(ggplot2)
+library(nortest)
+library(readr)
+library(ISLR)
+library(leaps)
+library(caret)
+library(GGally)
+library(corrplot)
+library(PerformanceAnalytics)
+```
+
+#El objetico principal del trabajo es comprobar la regularización. 
+
+#En primer lugar importo el dataset correspondiente a los datos de "nba".
+
+```{r}
+nba<-read.csv("C:/Users/alvar/Desktop/CUNEF/PREDICCIÓN/nba.csv")
+```
+
+#El siguiente paso es suprimir los NAs correspondientes al objeto nba.
+
+```{r}
+nba <- unique(nba)
+nba <- na.omit(nba)
+```
+
+#Técnica de regularización Elastic net.
+#Training y test split.
+
+```{r}
+set.seed(123) 
+nba_split <- initial_split(nba, prop = .7, strata = "Salary")
+nba_train <- training(nba_split) 
+nba_test <- testing(nba_split)
+```
+
+#Creación de matrices. Establecemos las matrices de entrenamiento y test con #lasmvariables más relevantes.
+
+```{r}
+nba_train_x <- model.matrix(Salary ~ Age  + NBA_DraftNumber +  MP + USG. + VORP + WS +
+                            AST. + TS.  , data = nba_train)[, -1]
+
+nba_train_y <- log(nba_train$Salary)
+
+nba_test_x <- model.matrix(Salary ~ Age  + NBA_DraftNumber + MP + USG. + VORP + WS +
+                           AST. + TS. , data = nba_test)[, -1]
+
+nba_test_y <- log(nba_test$Salary)
+```
+
+#Comprobamos la dimensión de la matriz
+
+```{r}
+dim(nba_train_x)
+```
+
+
+```{r}
+train_control <- trainControl(method = "cv", number = 10)
+caret_mod <- train( x = nba_train_x, y = nba_train_y, method = "glmnet", 
+                    preProc = c("center", "scale", "zv", "nzv"), trControl = train_control,
+                    tuneLength = 10 )
+
+caret_mod
+```
+
+#A través de este método hemos obtenido que el mejor modelo es en el que alpha = 1. 
+#Como consecuencia emplearemos el método de regularización por Lasso.
+
+```{r}
+cv_lasso <- cv.glmnet(nba_train_x, nba_train_y, alpha = 1)
+min(cv_lasso$cvm)
+
+```
+
+#Obtenemos la media de MSE en la muestra de test de el modelo.
+
+```{r}
+pred <- predict(cv_lasso, s = cv_lasso$lambda.min, nba_test_x) 
+media_error_modelo1 <- mean((nba_test_y - pred)^2)
+media_error_modelo1
+```
+
+#Cuando reajustamos el modelo lasso podemos observar los valores de los 
+#coeﬁcientes pertenecientes a las variables explicativas.
+
+#Comprobamos que en las variables edad, minutos jugados y  la contribución al 
+#equipo en las victorias el coeﬁciente es superior a 0.
+
+```{r}
+predict(cv_lasso, type = "coefficients", s = cv_lasso$lambda.min)
+```
+
+#Comparación con un modelo teniendo en cuenta todas las variables
+#de la base de datos a excepción del nombre de los jugadores, 
+#equipo y país de procedencia.
+
+```{r}
+nba_train_x2 <- model.matrix(Salary ~. -Player -NBA_Country -Tm, data = nba_train)[, -1] 
+nba_train_y2 <- log(nba_train$Salary)
+nba_test_x2 <- model.matrix(Salary~. -Player -NBA_Country -Tm, data = nba_test)[, -1] 
+nba_test_y2 <- log(nba_test$Salary)
+dim(nba_train_x2)
+```
+
+#Para obtener los valores de alpha y lambda utilizamos un cross-validation con K = 10.
+
+```{r}
+train_control2 <- trainControl(method = "cv", number = 10)
+caret_mod2 <- train( x = nba_train_x2, y = nba_train_y2, method = "glmnet",
+                     preProc = c("center", "scale", "zv", "nzv"),
+                     trControl = train_control2, tuneLength = 10 )
+
+caret_mod2
+
+```
+
+#En este caso obtenemos el valos para lambda=0.7
+
+```{r}
+cv_elastic_net <- cv.glmnet(nba_train_x2, nba_train_y2, alpha = 0.7) 
+min(cv_elastic_net$cvm)
+```
+
+#Obtenemos la media de MSE para la muestra de test.
+
+```{r}
+pred2 <- predict(cv_elastic_net, s = cv_elastic_net$lambda.min, nba_test_x2)
+media_error_modelo2 <- mean((nba_test_y2 - pred2)^2) 
+media_error_modelo2
+```
+
+#Al reajustar el modelo observamos los valores de los coeﬁcientes de las variables
+#explicativas, los cuales se mantienen con un coeﬁciente superior a 0 las variables de #edad, los minutos jugados, contribución a las victorias del equipo, 
+#la contribución en defensa a las victorias del equipo y el porcentaje de rebotes #defensivos. 
+
+```{r}
+predict(cv_elastic_net, type = "coefficients", s = cv_elastic_net$lambda.min)
+```
+
+#Comparamos la media de error entre los dos modelos.
+
+```{r}
+modelo <- c("modelo1", "modelo2")
+test.MSE <- c(media_error_modelo1, media_error_modelo2) 
+comparacion <- data.frame(modelo, test.MSE)
+ggplot(data = comparacion, aes(x = reorder(x = modelo, X = test.MSE), y = test.MSE)) + 
+  geom_bar(stat = "identity", aes(fill = modelo)) + labs(x = "Modelo", y = "Test error(MSE)") +
+  theme_bw() + coord_flip() + theme(legend.position = "none")
+```
+
+#Concluímos afirmando que el mejor modelo obtenido es el planteado ya que
+#la media de MSE es inferior al segundo modelo.
